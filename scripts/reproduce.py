@@ -228,7 +228,8 @@ class Run:
         require(len(pods) == 10, "Unexpected pod count")
         for pod in pods:
             require(pod["status"]["phase"] == "Running", "Pod is not running: " + pod["metadata"]["name"])
-            containers = {container["name"]: container for container in pod["spec"]["containers"]}
+            containers = {container["name"]: container for container in
+                          pod["spec"]["containers"] + pod["spec"].get("initContainers", [])}
             require(containers["audit"]["image"] == self.args.fixture_image, "Unexpected fixture image")
             app = pod["metadata"].get("labels", {}).get("app", "")
             if app.startswith("client-"):

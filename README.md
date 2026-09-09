@@ -36,9 +36,9 @@ Then:
 git clone https://github.com/cprayer/linkerd-replay-body-repro.git
 cd linkerd-replay-body-repro
 
-bash scripts/cluster.sh up
 bash scripts/build-proxies.sh
 bash fixture/build.sh
+bash scripts/cluster.sh up
 python3 scripts/reproduce.py
 ```
 
@@ -74,7 +74,7 @@ Delete the dedicated cluster explicitly when finished:
 bash scripts/cluster.sh delete
 ```
 
-Build caches are named Docker volumes. `TARGET_VOLUME`, `CARGO_VOLUME`, `BUILD_JOBS`, `PROXY_IMAGE`, `RUST_IMAGE`, and `RUNTIME_IMAGE` can be overridden for the proxy build. `FIXTURE_IMAGE` selects the fixture build tag. The runner accepts `CLUSTER_NAME`, `LINKERD_BIN`, `FIXTURE_IMAGE`, `BEFORE_IMAGE`, and `AFTER_IMAGE` overrides. Use matching image names between build and run.
+Build caches are named Docker volumes. Proxy build containers default to two CPUs and 4 GiB of memory, with swap disabled. `BUILD_CPUS`, `BUILD_MEMORY`, `BUILD_JOBS`, `TARGET_VOLUME`, `CARGO_VOLUME`, `PROXY_IMAGE`, `RUST_IMAGE`, and `RUNTIME_IMAGE` can be overridden for the proxy build. `FIXTURE_IMAGE` selects the fixture build tag. The runner accepts `CLUSTER_NAME`, `LINKERD_BIN`, `FIXTURE_IMAGE`, `BEFORE_IMAGE`, and `AFTER_IMAGE` overrides. Use matching image names between build and run.
 
 The fixture can also be checked without Kubernetes:
 

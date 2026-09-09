@@ -8,6 +8,8 @@ SOURCE="$CACHE/proxy-source"
 TARGET_VOLUME=${TARGET_VOLUME:-linkerd-replay-target}
 CARGO_VOLUME=${CARGO_VOLUME:-linkerd-replay-cargo}
 BUILD_JOBS=${BUILD_JOBS:-2}
+BUILD_CPUS=${BUILD_CPUS:-2}
+BUILD_MEMORY=${BUILD_MEMORY:-4g}
 RUST_IMAGE=${RUST_IMAGE:-rust:1.90}
 RUNTIME_IMAGE=${RUNTIME_IMAGE:-cr.l5d.io/linkerd/proxy:edge-26.8.2}
 PROXY_IMAGE=${PROXY_IMAGE:-linkerd-replay-proxy}
@@ -32,6 +34,7 @@ build() {
   local variant=$1 output="$CACHE/image-$1"
   mkdir -p "$output"
   docker run --rm \
+    --cpus "$BUILD_CPUS" --memory "$BUILD_MEMORY" --memory-swap "$BUILD_MEMORY" \
     -v "$SOURCE:/src:ro" -v "$output:/out" \
     -v "$TARGET_VOLUME:/target" -v "$CARGO_VOLUME:/usr/local/cargo" \
     -e CARGO_TARGET_DIR="/target/$variant" -e CARGO_BUILD_JOBS="$BUILD_JOBS" \
