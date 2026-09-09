@@ -12,7 +12,7 @@ docker run -d --name replay-repro linkerd-replay-repro --runs 5
 docker logs -f replay-repro
 ```
 
-The image contains prebuilt before/after proxies and an HTTP/2 fixture. It runs as a non-root user using upstream's integration harness for local routing and policy, without Kubernetes or additional container privileges. The first image build compiles Rust and takes several minutes.
+The image contains prebuilt before/after proxies and an HTTP/2 fixture using upstream's integration harness. The first image build compiles Rust and takes several minutes.
 
 ## Results
 
