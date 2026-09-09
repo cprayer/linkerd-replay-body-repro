@@ -1,0 +1,5 @@
+**
+!docker/
+!docker/Proxy.Dockerfile
+!patches/
+!patches/replay-unpolled-body.patch
