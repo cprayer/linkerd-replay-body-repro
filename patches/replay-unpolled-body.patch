@@ -1,0 +1,12 @@
+diff --git a/linkerd/http/retry/src/replay.rs b/linkerd/http/retry/src/replay.rs
+index 66ee9625e23bc05b9e7d8e076f71fb8b65a45bd3..4a28806fa7ef44c930becc8f7c039a773cadfcd4 100644
+--- a/linkerd/http/retry/src/replay.rs
++++ b/linkerd/http/retry/src/replay.rs
+@@ -189,6 +189,7 @@ where
+                 tracing::trace!("Cannot replay buffered body, maximum buffer length reached");
+                 return Poll::Ready(Some(Err(Capped.into())));
+             }
++            this.replay_body = false;
+         }
+         if this.replay_trailers {
+             this.replay_trailers = false;
