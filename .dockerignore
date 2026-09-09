@@ -3,3 +3,13 @@
 !docker/Proxy.Dockerfile
 !patches/
 !patches/replay-unpolled-body.patch
+!harness/
+!harness/replay.rs
+!fixture/
+!fixture/go.mod
+!fixture/go.sum
+!fixture/main.go
+!scripts/
+!scripts/run.py
+!scripts/reproduce.py
+!scripts/standalone.py

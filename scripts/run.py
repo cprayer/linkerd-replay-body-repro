@@ -157,6 +157,10 @@ class Batch:
         self.emit("Preparing cluster " + self.args.cluster + "...")
         self.command(["bash", "scripts/cluster.sh", "up"], "setup/cluster.log")
 
+    def reproduction_command(self, artifacts):
+        return [sys.executable, "scripts/reproduce.py", "--cluster", self.args.cluster,
+                "--artifacts", str(artifacts)]
+
     def repeat(self):
         for number in range(1, self.args.runs + 1):
             row = {"run": number, "status": "RUNNING", "attempts": []}
@@ -165,8 +169,7 @@ class Batch:
             for attempt in range(1, self.args.retries + 2):
                 folder = Path("run-%03d" % number) / ("attempt-%02d" % attempt)
                 self.emit("Run %d/%d, attempt %d/%d" % (number, self.args.runs, attempt, self.args.retries + 1))
-                code = self.command([sys.executable, "scripts/reproduce.py", "--cluster", self.args.cluster,
-                                     "--artifacts", str(self.out / folder)], folder / "console.log", check=False)
+                code = self.command(self.reproduction_command(self.out / folder), folder / "console.log", check=False)
                 result = {"attempt": attempt, "exitCode": code, "status": STATUSES.get(code, "FAIL"),
                           "log": str(folder / "console.log")}
                 summaries = list((self.out / folder).glob("*/summary.json"))
