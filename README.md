@@ -16,16 +16,16 @@ The image contains prebuilt before/after proxies and an HTTP/2 fixture using ups
 
 ## Results
 
-The [Go echo application](fixture/echo.go) returns the received body unchanged.
+The [Go client](fixture/client.go) sends the request once; the [Go server](fixture/server.go) echoes the received body unchanged.
 The client sends `ping` and prints its actual response through Linkerd:
 
 ```text
-ECHO refused-before-000 SENT "ping" (4 bytes) RECEIVED "pingping" (8 bytes) HTTP 200
-ECHO refused-after-000 SENT "ping" (4 bytes) RECEIVED "ping" (4 bytes) HTTP 200
+ECHO failfast-before-000 SENT "ping" (4 bytes) RECEIVED "pingping" (8 bytes) HTTP 200
+ECHO failfast-after-000 SENT "ping" (4 bytes) RECEIVED "ping" (4 bytes) HTTP 200
 ```
 
-`ECHO` is printed by the Go client's `exchange()` function in [fixture/main.go](fixture/main.go)
-after receiving the complete HTTP 200 response. `SENT` is the original client payload;
+`ECHO` is printed with `fmt.Printf` by the Go client in [fixture/client.go](fixture/client.go)
+after reading the complete response body. `SENT` is the original client payload;
 `RECEIVED` is the actual response body. This is client output, not a Linkerd or server log.
 Each line includes the request ID and HTTP status. The runner forwards the `-000` request's
 echo from each scenario to the Docker console; the raw client logs contain every request.
@@ -33,7 +33,12 @@ echo from each scenario to the Docker console; the raw client logs contain every
 
 The log ends with one row per run: **before duplicates → after duplicates → PASS/FAIL**. PASS means the original bug was reproduced and the fix passed all checks.
 
-Checks cover REFUSED_STREAM, FailFast, consumed-body 503, early 503, and a healthy backend. INCONCLUSIVE results get up to two extra attempts; FAIL is never retried.
+Checks cover REFUSED_STREAM, FailFast, consumed-body 503, early 503, and a healthy backend.
+The **FailFast case uses the simple HTTP/2 app without a client delay**: the client sends `ping`,
+and the proxy can retry from an empty backend to the echo server. The healthy control uses the same app.
+The frame-controlled [REFUSED_STREAM experiment](fixture/frames/README.md) sends HEADERS,
+waits 500 ms, then sends `ping`; its original controls and JSON logs remain available.
+The echo table in `report.md` shows both cases and their client delays. INCONCLUSIVE results get up to two extra attempts; FAIL is never retried.
 
 Repeat the same run:
 
@@ -77,15 +82,21 @@ policy gRPC services in the same process. The proxy receives backend addresses a
 route with at most one retry, a 64 KiB replay limit, and HTTP 503 as a retryable status.
 The Docker image builds the same harness against the original source and the one-line patch.
 
-The [Go client](fixture/main.go) uses HTTP/2 frames directly to control when the body arrives.
-Each measured request has its own connection and ID. It sends HEADERS, then schedules one DATA
-frame containing `ping` with END_STREAM; an early completed response can cancel that write.
-Retries are performed by Linkerd. The client collects the response body, prints it in the
-`ECHO` line, and compares its bytes with the original payload.
+For FailFast and the healthy control, [client.go](fixture/client.go) makes one HTTP/2 POST
+with `ping`, reads the response, and compares it with `ping`. [server.go](fixture/server.go)
+reads the request body and writes those bytes back, logging `SERVER ... RECEIVED ...`.
+The request is streamed without Content-Length so the server can echo extra bytes if the
+proxy duplicates them. The app adds no delay or warmup; the runner starts a separate client
+process and request ID for each concurrent request. Retries are performed by Linkerd.
+
+The [frame-controlled client](fixture/frames/client.go) is retained for REFUSED_STREAM and
+the 503 controls. It sends a bodyless warmup, then the measured request's HEADERS, and schedules
+one DATA frame containing `ping` after 500 ms. An early completed response can cancel that write.
+Its `exchange()` function also prints the actual response in an `ECHO` line.
 
 The [runner](scripts/standalone.py) executes these cases against both proxy versions:
 
-| Case | Concurrent requests | HEADERS → DATA delay | Backend behavior |
+| Case | Concurrent requests | Added client delay | Backend behavior |
 |---|---|---|---|
 | REFUSED_STREAM | 10 | 500 ms | Rejects the first attempt on HEADERS; echoes the retry |
 | Consumed-body 503 | 10 | 500 ms | Reads the entire first body before returning 503; echoes the retry |
@@ -93,7 +104,6 @@ The [runner](scripts/standalone.py) executes these cases against both proxy vers
 | Healthy | 10 | 0 ms | Echoes the received body |
 | FailFast | 20 | 0 ms | Routes between an empty backend and a healthy echo backend |
 
-Cases other than FailFast first send a separate bodyless warmup request on each connection.
 The REFUSED_STREAM delay gives the rejection time to arrive before the client sends DATA.
 
 FailFast uses `RandomAvailable` with **empty backend weight 100 : healthy backend weight 1**.

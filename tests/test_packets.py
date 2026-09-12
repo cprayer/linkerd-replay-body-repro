@@ -60,8 +60,8 @@ class PacketTest(unittest.TestCase):
                         fields(header, {"http2.header.name": name, "http2.header.value": values[name]})
                 fields(frame, {k: v for k, v in values.items() if k.startswith("http2.")})
 
-        def headers(stream, ident):
-            return stream, "1", {"x-audit-id": ident, ":path": "/audit.Service/Call"}
+        def headers(stream, ident, path="/audit.Service/Call"):
+            return stream, "1", {"x-audit-id": ident, ":path": path}
 
         def data(stream, hex_value, ended=True, reassembled=""):
             values = {"http2.data.data": hex_value, "http2.length": "1",
@@ -70,10 +70,10 @@ class PacketTest(unittest.TestCase):
                 values["http2.body.reassembled.data"] = reassembled
             return stream, "0", values
 
-        packet("0", "4140", [headers("1", "a"), headers("3", "b"),
+        packet("0", "4140", [headers("1", "a", "/"), headers("3", "b"),
                               data("1", "61"), data("3", "62")])
         packet("0", "50000", [(s, "1", {":status": "200", "http2.flags.end_stream": "True"}) for s in ("1", "3")])
-        packet("1", "8080", [headers("1", "a"), headers("3", "b"), headers("5", "b"),
+        packet("1", "8080", [headers("1", "a", "/"), headers("3", "b"), headers("5", "b"),
                               data("1", "61", False), data("3", "62"),
                               data("1", "6161", reassembled="6161"), data("5", "62")])
         packet("1", "50000", [(s, "1", {":status": "503" if s == "3" else "200",

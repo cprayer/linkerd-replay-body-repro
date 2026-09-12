@@ -45,7 +45,7 @@ def main():
             for attempt in range(1, invocations + 1):
                 cmd = ['docker', 'run', '--rm', '--network', 'container:' + name, args.image,
                        '-mode', 'client', '-addr', '127.0.0.1:8080', '-id', 'smoke',
-                       '-payload', 'hello world', '-delay-ms', '200']
+                       '-payload', 'hello world', '-delay-ms', '0' if failure == 'none' else '200']
                 if failure == 'grpc14':
                     cmd += ['-grpc']
                 result = run(cmd)

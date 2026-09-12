@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from standalone import LocalRun
+from standalone import LocalRun, verify_echo_case
 
 
 class LocalRunTest(unittest.TestCase):
@@ -93,6 +93,42 @@ class LocalRunTest(unittest.TestCase):
         self.assertEqual(summary["cases"][0]["duplicateRequests"], 10)
         self.assertEqual(summary["cases"][0]["error"], "incomplete capture")
         self.assertEqual(summary["status"], "FAIL")
+
+    def test_simple_echo_requires_matching_unique_client_and_server_logs(self):
+        label, ident = "failfast-before", "failfast-before-000"
+        client = self.repro.out / (label + ".log")
+        server = self.repro.out / "healthy-before-server.log"
+        client.write_text('ECHO %s SENT "ping" (4 bytes) RECEIVED "pingping" (8 bytes) HTTP 200\n' % ident)
+        server_line = 'SERVER %s RECEIVED "pingping" (8 bytes)\n' % ident
+        server.write_text(server_line)
+        (self.repro.out / "client-before.prom").write_text(
+            '\n'.join('%s{route_name="%s"} 1' % (name, label) for name in (
+                "outbound_http_route_retry_requests_total", "outbound_http_route_retry_successes_total")))
+        (self.repro.out / "client-before-proxy.log").write_text(
+            "retryable=true error=backend failfast-before-empty: service in fail-fast\n")
+        self.repro.codes[label] = 1
+        self.repro.echo_codes[label] = {ident: 1}
+        row = {"scenario": "failfast", "variant": "before", "requests": 1}
+        verify_echo_case(self.repro, row)
+        self.assertEqual(row["duplicateRequests"], 1)
+        self.assertEqual(row["echo"]["received"], "pingping")
+        for invalid in ("", server_line * 2, server_line.replace('"pingping"', '"ping"')):
+            server.write_text(invalid)
+            with self.assertRaisesRegex(RuntimeError, "server body disagrees"):
+                verify_echo_case(self.repro, row)
+        server.write_text(server_line)
+        self.repro.echo_codes[label][ident] = 0
+        with self.assertRaisesRegex(RuntimeError, "exit code disagrees"):
+            verify_echo_case(self.repro, row)
+
+    def test_simple_echo_timeout_preserves_partial_output(self):
+        error = subprocess.TimeoutExpired(["echo-h2"], 30, output=b"partial echo")
+        with patch("standalone.subprocess.run", side_effect=error):
+            result = self.repro.echo_clients("healthy-before", "127.0.0.1:8080", 1)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(self.repro.echo_codes["healthy-before"], {"healthy-before-000": 124})
+        self.assertIn("partial echo", (self.repro.out / "healthy-before.log").read_text())
+        self.assertIn("Client timed out", result.stdout)
 
 
 if __name__ == "__main__":
