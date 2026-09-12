@@ -15,8 +15,8 @@ docker logs -f replay-repro
 
 ## Check the result
 
-The client sends `ping` through Linkerd. The server echoes the received body unchanged.
-Example console output from a successful reproduction:
+The example below shows **FailFast, the simplest reproduction**: the client sends `ping`
+through Linkerd, and the server echoes the received body unchanged.
 
 ```text
 ECHO failfast-before-000 SENT "ping" (4 bytes) RECEIVED "pingping" (8 bytes) HTTP 200
@@ -24,8 +24,10 @@ ECHO failfast-after-000 SENT "ping" (4 bytes) RECEIVED "ping" (4 bytes) HTTP 200
 ```
 
 `ECHO` is printed by the Go client after reading the response; it is not a Linkerd log.
-Before the fix, `ping` returns as `pingping`. After the fix, it returns as `ping`.
-**PASS means the bug was reproduced before the fix and all checks passed after it.**
+In this FailFast example, `ping` returns as `pingping` before the fix and as `ping` after it.
+
+For the full run across the scenarios below, **PASS means the bug was reproduced before
+the fix and all checks passed after it.**
 INCONCLUSIVE runs get up to two extra attempts; FAIL is never retried.
 
 | Scenarios | Application |
