@@ -24,9 +24,12 @@ ECHO refused-before-000 SENT "ping" (4 bytes) RECEIVED "pingping" (8 bytes) HTTP
 ECHO refused-after-000 SENT "ping" (4 bytes) RECEIVED "ping" (4 bytes) HTTP 200
 ```
 
-Each `ECHO` line includes the request ID and HTTP status. One HTTP 200 echo per scenario is shown
-in the Docker console; the raw client logs contain every request. `report.md` also shows
-the sent/received strings with direct links to those logs.
+`ECHO` is printed by the Go client's `exchange()` function in [fixture/main.go](fixture/main.go)
+after receiving the complete HTTP 200 response. `SENT` is the original client payload;
+`RECEIVED` is the actual response body. This is client output, not a Linkerd or server log.
+Each line includes the request ID and HTTP status. The runner forwards the `-000` request's
+echo from each scenario to the Docker console; the raw client logs contain every request.
+`report.md` also shows the sent/received strings with direct links to those logs.
 
 The log ends with one row per run: **before duplicates → after duplicates → PASS/FAIL**. PASS means the original bug was reproduced and the fix passed all checks.
 
@@ -62,6 +65,43 @@ Capture is enabled by default in the standalone Docker image and uses its isolat
 The image grants only `tcpdump` the `NET_RAW` file capability; the runner stays non-root.
 Docker's default capabilities suffice. If your runtime drops `NET_RAW` or disables file capabilities,
 allow capture for this container before running it.
+
+## How the reproduction works
+
+```text
+Go client → Linkerd outbound proxy → Go echo server
+```
+
+The [harness](harness/replay.rs) runs actual Linkerd proxy code with test destination and
+policy gRPC services in the same process. The proxy receives backend addresses and an HTTP/2
+route with at most one retry, a 64 KiB replay limit, and HTTP 503 as a retryable status.
+The Docker image builds the same harness against the original source and the one-line patch.
+
+The [Go client](fixture/main.go) uses HTTP/2 frames directly to control when the body arrives.
+Each measured request has its own connection and ID. It sends HEADERS, then schedules one DATA
+frame containing `ping` with END_STREAM; an early completed response can cancel that write.
+Retries are performed by Linkerd. The client collects the response body, prints it in the
+`ECHO` line, and compares its bytes with the original payload.
+
+The [runner](scripts/standalone.py) executes these cases against both proxy versions:
+
+| Case | Concurrent requests | HEADERS → DATA delay | Backend behavior |
+|---|---|---|---|
+| REFUSED_STREAM | 10 | 500 ms | Rejects the first attempt on HEADERS; echoes the retry |
+| Consumed-body 503 | 10 | 500 ms | Reads the entire first body before returning 503; echoes the retry |
+| Early 503 | 10 | 500 ms | Returns 503 on the first attempt's HEADERS |
+| Healthy | 10 | 0 ms | Echoes the received body |
+| FailFast | 20 | 0 ms | Routes between an empty backend and a healthy echo backend |
+
+Cases other than FailFast first send a separate bodyless warmup request on each connection.
+The REFUSED_STREAM delay gives the rejection time to arrive before the client sends DATA.
+
+FailFast uses `RandomAvailable` with **empty backend weight 100 : healthy backend weight 1**.
+The empty backend is advertised with no endpoints, making it possible for a request to fail
+before its body is read. The weights favor that path while retaining a healthy backend for
+the retry; they do not guarantee a fixed failure percentage because backend availability
+also affects selection. FailFast skips warmup to exercise backend startup. If the required
+retry/duplication is not observed, the run is INCONCLUSIVE and can be repeated by the runner.
 
 ## License
 
