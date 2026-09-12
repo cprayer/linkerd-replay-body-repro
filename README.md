@@ -6,17 +6,10 @@ against upstream commit [`e5de317d`](https://github.com/linkerd/linkerd2-proxy/c
 ## Run
 
 Docker is the only prerequisite. The first build compiles the before/after Linkerd proxies and takes several minutes.
-The builder and reproduction container are each limited to **2 CPUs and 4 GiB RAM**, with swap disabled.
 
 ```sh
-docker buildx inspect linkerd-replay-builder >/dev/null 2>&1 || \
-  docker buildx create --name linkerd-replay-builder --driver docker-container
-docker buildx inspect --bootstrap linkerd-replay-builder
-docker update --cpus 2 --memory 4g --memory-swap 4g buildx_buildkit_linkerd-replay-builder0
-docker buildx build --builder linkerd-replay-builder --load -t linkerd-replay-repro \
-  https://github.com/cprayer/linkerd-replay-body-repro.git
-docker run -d --name replay-repro --cpus 2 --memory 4g --memory-swap 4g \
-  linkerd-replay-repro --runs 5
+docker build -t linkerd-replay-repro https://github.com/cprayer/linkerd-replay-body-repro.git
+docker run -d --name replay-repro linkerd-replay-repro --runs 5
 docker logs -f replay-repro
 ```
 
