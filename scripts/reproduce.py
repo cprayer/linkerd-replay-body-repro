@@ -337,9 +337,9 @@ def verify_case(run, row):
     row.update(payloadMatches=summary["succeeded"], duplicateRequests=len(duplicate_ids), duplicateIds=duplicate_ids,
                responseStatuses=dict(collections.Counter(event["status"] for event in responses)),
                clientDataWrites=len(incoming), proxyRetriedRequests=retries, proxyRetrySuccesses=successes)
-    if case == "refused":
+    if case in ("refused", "failfast"):
         example = next(response for response in responses if response["id"] == label + "-000")
-        row["echo"] = {"sent": PAYLOAD, "received": example["body"], "id": example["id"], "log": label + ".log"}
+        row["echo"] = {"sent": PAYLOAD, "received": example["body"], "id": example["id"], "log": label + ".log", "delayMs": row["delayMs"]}
     require(retries == successes, label + ": proxy retry failed")
     if case == "failfast":
         failures = len(re.findall(r"retryable=true error=.*failfast-" + variant + r"-empty.*service in fail-fast",

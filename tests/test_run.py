@@ -55,13 +55,15 @@ if not os.environ.get("TEST_NO_SUMMARY"):
     out.mkdir(parents=True)
     (out / "server.log").write_text("server diagnostic")
     for variant in ("before", "after"):
-        (out / ("refused-" + variant + ".log")).write_text("actual echo response")
+        for scenario in ("refused", "failfast"):
+            (out / (scenario + "-" + variant + ".log")).write_text("actual echo response")
     status = os.environ.get("TEST_SUMMARY_STATUS") or {0: "PASS", 1: "FAIL", 2: "INCONCLUSIVE"}.get(code, "FAIL")
     (out / "summary.json").write_text(json.dumps({"status": status, "cases": [
         {"scenario": scenario, "variant": variant, "status": status,
          "duplicateRequests": (10 if scenario == "refused" else 2 if scenario == "failfast" else 0) if variant == "before" else 0,
          **({"echo": {"sent": "ping", "received": os.environ.get("TEST_ECHO", "pingping") if variant == "before" else "ping",
-                      "id": "refused-" + variant + "-000", "log": "refused-" + variant + ".log"}} if scenario == "refused" else {})}
+                      "id": scenario + "-" + variant + "-000", "log": scenario + "-" + variant + ".log",
+                      "delayMs": 500 if scenario == "refused" else 0}} if scenario in ("refused", "failfast") else {})}
         for variant in ("before", "after")
         for scenario in ("refused", "consumed503", "early503", "healthy", "failfast")]}))
 sys.exit(code)
@@ -107,8 +109,12 @@ sys.exit(code)
     def test_report_displays_observed_echo_and_links_raw_response(self):
         result, report = self.run_batch([0], TEST_ECHO="unexpected response")
         self.assertEqual(result.returncode, 0)
-        echo = report["runs"][0]["attempts"][0]["echo"]["before"]
+        echo = report["runs"][0]["attempts"][0]["echo"]["refused"]["before"]
         self.assertEqual(echo["received"], "unexpected response")
+        immediate = report["runs"][0]["attempts"][0]["echo"]["failfast"]["before"]
+        self.assertEqual(immediate["received"], "unexpected response")
+        self.assertEqual(immediate["delayMs"], 0)
+        self.assertIn("| failfast | 0 ms |", (self.out / "report.md").read_text())
         self.assertTrue((self.out / echo["log"]).is_file())
         self.assertIn('["unexpected response"](' + echo["log"] + ')', (self.out / "report.md").read_text())
 

@@ -34,7 +34,7 @@ FROM golang:1.25.1 AS fixture
 WORKDIR /fixture
 COPY fixture/go.mod fixture/go.sum ./
 RUN go mod download
-COPY fixture/main.go fixture/echo.go ./
+COPY fixture/*.go ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /audit-h2 .
 
 FROM python:3.13-slim-trixie

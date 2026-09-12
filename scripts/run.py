@@ -63,15 +63,16 @@ class Batch:
         echoes = [row for row in self.report["runs"] if row["attempts"] and row["attempts"][-1].get("echo")]
         if echoes:
             lines.extend(["The Go application echoes request bytes unchanged. "
-                          "Received is the client's actual HTTP response body through Linkerd (REFUSED_STREAM example).", "",
-                          "| Run | Sent | Received before | Received after |",
-                          "|---|---|---|---|"])
+                          "Received is the client's actual HTTP response body through Linkerd.", "",
+                          "| Run | Scenario | Client delay | Sent | Received before | Received after |",
+                          "|---|---|---|---|---|---|"])
             for row in echoes:
-                echo = row["attempts"][-1]["echo"]
-                received = ["[%s](%s)" % (json.dumps(echo[v]["received"]), echo[v]["log"]) if v in echo else "?"
-                            for v in ("before", "after")]
-                lines.append("| %d | `%s` | %s | %s |" % (
-                    row["run"], next(iter(echo.values()))["sent"], *received))
+                for scenario, echo in row["attempts"][-1]["echo"].items():
+                    sample = next(iter(echo.values()))
+                    received = ["[%s](%s)" % (json.dumps(echo[v]["received"]), echo[v]["log"]) if v in echo else "?"
+                                for v in ("before", "after")]
+                    lines.append("| %d | %s | %d ms | `%s` | %s | %s |" % (
+                        row["run"], scenario, sample["delayMs"], sample["sent"], *received))
             lines.append("")
         lines.extend(["| Run | Before: duplicated requests | After: duplicated requests | Result | Logs |",
                       "|---|---|---|---|---|"])
@@ -211,7 +212,7 @@ class Batch:
                             result["duplicates"][variant] = sum(case["duplicateRequests"] for case in cases)
                         for case in cases:
                             if case.get("echo"):
-                                result["echo"][variant] = dict(case["echo"], log=str(
+                                result["echo"].setdefault(case["scenario"], {})[variant] = dict(case["echo"], log=str(
                                     (summaries[0].parent / case["echo"]["log"]).relative_to(self.out)))
                 except (ValueError, KeyError, OSError, TypeError) as error:
                     result.update(status="FAIL", error=str(error))

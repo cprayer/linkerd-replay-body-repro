@@ -16,7 +16,7 @@ The image contains prebuilt before/after proxies and an HTTP/2 fixture using ups
 
 ## Results
 
-The [Go echo application](fixture/echo.go) returns the received body unchanged.
+The [Go client](fixture/client.go) sends the request once; the [Go server](fixture/server.go) echoes the received body unchanged.
 The client sends `ping` and prints its actual response through Linkerd:
 
 ```text
@@ -30,7 +30,11 @@ the sent/received strings with direct links to those logs.
 
 The log ends with one row per run: **before duplicates → after duplicates → PASS/FAIL**. PASS means the original bug was reproduced and the fix passed all checks.
 
-Checks cover REFUSED_STREAM, FailFast, consumed-body 503, early 503, and a healthy backend. INCONCLUSIVE results get up to two extra attempts; FAIL is never retried.
+Checks cover REFUSED_STREAM, FailFast, consumed-body 503, early 503, and a healthy backend.
+The REFUSED_STREAM case sends HEADERS, waits 500 ms, then sends `ping`.
+The **FailFast case has no client delay** (`-delay-ms 0`): the client sends `ping` immediately,
+and the proxy can retry from an empty backend to the echo server.
+The echo table in `report.md` shows both cases and their client delays. INCONCLUSIVE results get up to two extra attempts; FAIL is never retried.
 
 Repeat the same run:
 
