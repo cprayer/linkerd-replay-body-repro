@@ -1,10 +1,11 @@
 # Linkerd ReplayBody reproduction
 
-Reproduces an HTTP/2 request-body duplication bug and verifies the [one-line fix](patches/replay-unpolled-body.patch), using upstream commit [`e5de317d`](https://github.com/linkerd/linkerd2-proxy/commit/e5de317dfe0feb8f6ff06f07c4e8ec9f61ab7a8f).
+Reproduces HTTP/2 request-body duplication and checks the [one-line fix](patches/replay-unpolled-body.patch)
+against upstream commit [`e5de317d`](https://github.com/linkerd/linkerd2-proxy/commit/e5de317dfe0feb8f6ff06f07c4e8ec9f61ab7a8f).
 
 ## Run
 
-Docker is the only prerequisite. Build once, then run the image:
+Docker is the only prerequisite. The first build compiles the before/after Linkerd proxies and takes several minutes.
 
 ```sh
 docker build -t linkerd-replay-repro https://github.com/cprayer/linkerd-replay-body-repro.git
@@ -12,106 +13,41 @@ docker run -d --name replay-repro linkerd-replay-repro --runs 5
 docker logs -f replay-repro
 ```
 
-The image contains prebuilt before/after proxies and an HTTP/2 fixture using upstream's integration harness. The first image build compiles Rust and takes several minutes.
+## Check the result
 
-## Results
-
-The [Go client](fixture/client.go) sends the request once; the [Go server](fixture/server.go) echoes the received body unchanged.
-The client sends `ping` and prints its actual response through Linkerd:
+The client sends `ping` through Linkerd. The server echoes the received body unchanged.
+Example console output from a successful reproduction:
 
 ```text
 ECHO failfast-before-000 SENT "ping" (4 bytes) RECEIVED "pingping" (8 bytes) HTTP 200
 ECHO failfast-after-000 SENT "ping" (4 bytes) RECEIVED "ping" (4 bytes) HTTP 200
 ```
 
-`ECHO` is printed with `fmt.Printf` by the Go client in [fixture/client.go](fixture/client.go)
-after reading the complete response body. `SENT` is the original client payload;
-`RECEIVED` is the actual response body. This is client output, not a Linkerd or server log.
-Each line includes the request ID and HTTP status. The runner forwards the `-000` request's
-echo from each scenario to the Docker console; the raw client logs contain every request.
-`report.md` also shows the sent/received strings with direct links to those logs.
+`ECHO` is printed by the Go client after reading the response; it is not a Linkerd log.
+Before the fix, `ping` returns as `pingping`. After the fix, it returns as `ping`.
+**PASS means the bug was reproduced before the fix and all checks passed after it.**
+INCONCLUSIVE runs get up to two extra attempts; FAIL is never retried.
 
-The log ends with one row per run: **before duplicates → after duplicates → PASS/FAIL**. PASS means the original bug was reproduced and the fix passed all checks.
+| Scenarios | Application |
+|---|---|
+| FailFast, Healthy | Simple [client.go](fixture/client.go) / [server.go](fixture/server.go), without added delay or warmup |
+| REFUSED_STREAM, consumed-body 503, early 503 | [fixture/frames/](fixture/frames/README.md), with controlled HTTP/2 frames and a 500 ms body delay |
 
-Checks cover REFUSED_STREAM, FailFast, consumed-body 503, early 503, and a healthy backend.
-The **FailFast case uses the simple HTTP/2 app without a client delay**: the client sends `ping`,
-and the proxy can retry from an empty backend to the echo server. The healthy control uses the same app.
-The frame-controlled [REFUSED_STREAM experiment](fixture/frames/README.md) sends HEADERS,
-waits 500 ms, then sends `ping`; its original controls and JSON logs remain available.
-The echo table in `report.md` shows both cases and their client delays. INCONCLUSIVE results get up to two extra attempts; FAIL is never retried.
+FailFast uses an empty backend with weight **100** and a healthy echo backend with weight **1**,
+with at most one proxy retry. The weights favor the failure path; the observed count can vary.
 
-Repeat the same run:
-
-```sh
-docker start -a replay-repro
-```
-
-Copy the summary table and raw logs if needed:
+Copy the results:
 
 ```sh
 docker cp replay-repro:/results ./results
 ```
 
-Open the latest directory's `report.md`; its **Logs** links lead directly to details.
+Open the latest directory's **report.md** for sent/received payloads, duplicate counts, and links to raw logs.
+Follow **Packet captures and DATA comparisons** to compare HTTP/2 DATA before and after the proxy,
+independently of application logs. Each case includes a PCAP, TShark decode, and packet comparison.
+Failures also produce one **errors.log** with combined diagnostics.
 
-The existing summaries and fixture/proxy logs are also accompanied by packet evidence.
-Follow **Packet captures and DATA comparisons → Run → a duplicate count** to see request IDs,
-input/output body lengths and contents, and packet/TCP/HTTP/2 stream numbers.
-Each backend retry is compared separately, so a normal retry is not counted as body duplication.
-
-Each scenario saves a `.pcap` captured by `tcpdump` and an `.http2.txt` decoded by TShark.
-The comparison reads captured HTTP/2 headers and DATA, independently of fixture JSON logs.
-Open the PCAP in Wireshark or use the exact TShark command and filters included in the comparison report.
-Capture errors, reported packet drops, incomplete evidence, or disagreement with fixture counts fail the run.
-Only failed batches create `errors.log`, combining console, fixture, and proxy logs with failure details.
-Capture statistics, TShark diagnostic logs, `.stderr` files, and intermediate PDML files are not saved separately.
-
-Capture is enabled by default in the standalone Docker image and uses its isolated loopback interface.
-The image grants only `tcpdump` the `NET_RAW` file capability; the runner stays non-root.
-Docker's default capabilities suffice. If your runtime drops `NET_RAW` or disables file capabilities,
-allow capture for this container before running it.
-
-## How the reproduction works
-
-```text
-Go client → Linkerd outbound proxy → Go echo server
-```
-
-The [harness](harness/replay.rs) runs actual Linkerd proxy code with test destination and
-policy gRPC services in the same process. The proxy receives backend addresses and an HTTP/2
-route with at most one retry, a 64 KiB replay limit, and HTTP 503 as a retryable status.
-The Docker image builds the same harness against the original source and the one-line patch.
-
-For FailFast and the healthy control, [client.go](fixture/client.go) makes one HTTP/2 POST
-with `ping`, reads the response, and compares it with `ping`. [server.go](fixture/server.go)
-reads the request body and writes those bytes back, logging `SERVER ... RECEIVED ...`.
-The request is streamed without Content-Length so the server can echo extra bytes if the
-proxy duplicates them. The app adds no delay or warmup; the runner starts a separate client
-process and request ID for each concurrent request. Retries are performed by Linkerd.
-
-The [frame-controlled client](fixture/frames/client.go) is retained for REFUSED_STREAM and
-the 503 controls. It sends a bodyless warmup, then the measured request's HEADERS, and schedules
-one DATA frame containing `ping` after 500 ms. An early completed response can cancel that write.
-Its `exchange()` function also prints the actual response in an `ECHO` line.
-
-The [runner](scripts/standalone.py) executes these cases against both proxy versions:
-
-| Case | Concurrent requests | Added client delay | Backend behavior |
-|---|---|---|---|
-| REFUSED_STREAM | 10 | 500 ms | Rejects the first attempt on HEADERS; echoes the retry |
-| Consumed-body 503 | 10 | 500 ms | Reads the entire first body before returning 503; echoes the retry |
-| Early 503 | 10 | 500 ms | Returns 503 on the first attempt's HEADERS |
-| Healthy | 10 | 0 ms | Echoes the received body |
-| FailFast | 20 | 0 ms | Routes between an empty backend and a healthy echo backend |
-
-The REFUSED_STREAM delay gives the rejection time to arrive before the client sends DATA.
-
-FailFast uses `RandomAvailable` with **empty backend weight 100 : healthy backend weight 1**.
-The empty backend is advertised with no endpoints, making it possible for a request to fail
-before its body is read. The weights favor that path while retaining a healthy backend for
-the retry; they do not guarantee a fixed failure percentage because backend availability
-also affects selection. FailFast skips warmup to exercise backend startup. If the required
-retry/duplication is not observed, the run is INCONCLUSIVE and can be repeated by the runner.
+To repeat using the same container: `docker start -a replay-repro`.
 
 ## License
 
