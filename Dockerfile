@@ -39,11 +39,15 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /audit-h2 .
 
 FROM python:3.13-slim-trixie
 WORKDIR /app
+RUN DEBIAN_FRONTEND=noninteractive apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tshark tcpdump libcap2-bin \
+    && setcap cap_net_raw=ep /usr/bin/tcpdump \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=source /replay-before /usr/local/bin/replay-before
 COPY --from=patched /replay-after /usr/local/bin/replay-after
 COPY --from=fixture /audit-h2 /usr/local/bin/audit-h2
 COPY --from=source /src/linkerd/app/integration/src/data /src/linkerd/app/integration/src/data
-COPY scripts/run.py scripts/reproduce.py scripts/standalone.py ./scripts/
+COPY scripts/run.py scripts/reproduce.py scripts/standalone.py scripts/packets.py ./scripts/
 RUN mkdir /results && chown 65532:65532 /results
 ENV LINKERD2_PROXY_LOG="linkerd=debug,warn" PYTHONUNBUFFERED=1 NO_COLOR=1
 LABEL org.opencontainers.image.source="https://github.com/cprayer/linkerd-replay-body-repro" \

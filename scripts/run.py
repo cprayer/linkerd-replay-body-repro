@@ -79,6 +79,10 @@ class Batch:
             lines.extend(["", "Error: " + self.report["error"]])
         lines.extend(["", "Counts cover all scenarios in the final attempt. '?' means data is incomplete.", "",
                       "[Full log](runner.log) · [Raw results](summary.json)"])
+        packets = ["[Run %d](%s)" % (row["run"], row["attempts"][-1]["packetReport"])
+                   for row in self.report["runs"] if row["attempts"] and row["attempts"][-1].get("packetReport")]
+        if packets:
+            lines.extend(["", "Packet captures and DATA comparisons: " + " · ".join(packets)])
         (self.out / "report.md").write_text("\n".join(lines) + "\n")
 
     def emit(self, message):
@@ -178,6 +182,8 @@ class Batch:
                         raise ValueError("Expected one reproduction summary")
                     summary = json.loads(summaries[0].read_text())
                     result["summary"] = str(summaries[0].relative_to(self.out))
+                    if summary.get("packetReport"):
+                        result["packetReport"] = str((summaries[0].parent / summary["packetReport"]).relative_to(self.out))
                     if code not in STATUSES or summary["status"] != STATUSES[code]:
                         raise ValueError("Summary status disagrees with exit code")
                     result["duplicates"] = {}

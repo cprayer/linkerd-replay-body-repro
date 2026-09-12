@@ -34,6 +34,21 @@ docker cp replay-repro:/results ./results
 
 Open the latest directory's `report.md`; its **Logs** links lead directly to details.
 
+The existing summaries and fixture/proxy logs are also accompanied by packet evidence.
+Follow **Packet captures and DATA comparisons → Run → a duplicate count** to see request IDs,
+input/output body lengths and contents, and packet/TCP/HTTP/2 stream numbers.
+Each backend retry is compared separately, so a normal retry is not counted as body duplication.
+
+Each scenario saves a `.pcap` captured by `tcpdump` and an `.http2.txt` decoded by TShark.
+The comparison reads captured HTTP/2 headers and DATA, independently of fixture JSON logs.
+Open the PCAP in Wireshark or use the exact TShark command and filters included in the comparison report.
+Capture errors, reported packet drops, incomplete evidence, or disagreement with fixture counts fail the run.
+
+Capture is enabled by default in the standalone Docker image and uses its isolated loopback interface.
+The image grants only `tcpdump` the `NET_RAW` file capability; the runner stays non-root.
+Docker's default capabilities suffice. If your runtime drops `NET_RAW` or disables file capabilities,
+allow capture for this container before running it.
+
 ## License
 
 [Apache-2.0](LICENSE)

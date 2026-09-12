@@ -14,6 +14,9 @@ class LocalRunTest(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.repro = LocalRun(Path(temporary.name))
+        capture = patch("standalone.capture")
+        capture.start()
+        self.addCleanup(capture.stop)
         (self.repro.out / "refused-before-listeners.json").write_text(
             json.dumps({"outbound": "127.0.0.1:4140", "admin": "127.0.0.1:4191"}))
         self.server, self.proxy = Mock(), Mock()
@@ -55,6 +58,18 @@ class LocalRunTest(unittest.TestCase):
         summary = json.loads((self.repro.out / "summary.json").read_text())
         self.assertEqual(summary["status"], "FAIL")
         self.assertEqual(summary["error"], "proxy failed to start")
+
+    def test_packet_analysis_failure_preserves_fixture_counts(self):
+        self.repro.scenario = Mock(return_value={"outbound": "127.0.0.1:4140", "backend": "127.0.0.1:8080"})
+        with patch("standalone.CASES", [("refused", 10, 500)]), \
+                patch("standalone.VARIANTS", ["before"]), \
+                patch("standalone.verify_case", side_effect=lambda run, row: row.update(duplicateRequests=10)), \
+                patch("standalone.analyze", side_effect=ValueError("incomplete capture")):
+            self.assertEqual(self.repro.execute(), 1)
+        summary = json.loads((self.repro.out / "summary.json").read_text())
+        self.assertEqual(summary["cases"][0]["duplicateRequests"], 10)
+        self.assertEqual(summary["cases"][0]["error"], "incomplete capture")
+        self.assertEqual(summary["status"], "FAIL")
 
 
 if __name__ == "__main__":
