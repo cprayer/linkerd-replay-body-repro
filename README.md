@@ -35,18 +35,24 @@ INCONCLUSIVE runs get up to two extra attempts; FAIL is never retried.
 | FailFast, Healthy | Simple [client.go](fixture/client.go) / [server.go](fixture/server.go), without added delay or warmup |
 | REFUSED_STREAM, consumed-body 503, early 503 | [fixture/frames/](fixture/frames/README.md), with controlled HTTP/2 frames and a 500 ms body delay |
 
+The Docker commands above run all these scenarios. HTTP 200 echo responses from
+`fixture/frames/` also appear in the console in the same `ECHO` format.
+Full client logs, including early 503 responses, are saved in the results.
+
 FailFast uses an empty backend with weight **100** and a healthy echo backend with weight **1**,
 with at most one proxy retry. The weights favor the failure path; the observed count can vary.
 
-Copy the results:
+To inspect the full logs, packet dumps, and Markdown reports, copy the results:
 
 ```sh
 docker cp replay-repro:/results ./results
 ```
 
-Open the latest directory's **report.md** for sent/received payloads, duplicate counts, and links to raw logs.
-Follow **Packet captures and DATA comparisons** to compare HTTP/2 DATA before and after the proxy,
-independently of application logs. Each case includes a PCAP, TShark decode, and packet comparison.
+Open the latest directory's **report.md** for payload comparisons and links to raw logs.
+Its **Packet captures and DATA comparisons** links lead to PCAP files, TShark decodes,
+and Markdown comparisons of HTTP/2 DATA before and after the proxy.
+The capture and decoding tooling was implemented with AI assistance. I have personally
+checked the Go client logs, but have not manually reviewed the PCAP files or TShark decodes.
 Failures also produce one **errors.log** with combined diagnostics.
 
 To repeat using the same container: `docker start -a replay-repro`.
