@@ -35,7 +35,9 @@ WORKDIR /fixture
 COPY fixture/go.mod fixture/go.sum ./
 RUN go mod download
 COPY fixture/*.go ./
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /audit-h2 .
+COPY fixture/frames/*.go ./frames/
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /echo-h2 . \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /audit-h2 ./frames
 
 FROM python:3.13-slim-trixie
 WORKDIR /app
@@ -46,6 +48,7 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update \
 COPY --from=source /replay-before /usr/local/bin/replay-before
 COPY --from=patched /replay-after /usr/local/bin/replay-after
 COPY --from=fixture /audit-h2 /usr/local/bin/audit-h2
+COPY --from=fixture /echo-h2 /usr/local/bin/echo-h2
 COPY --from=source /src/linkerd/app/integration/src/data /src/linkerd/app/integration/src/data
 COPY scripts/run.py scripts/reproduce.py scripts/standalone.py scripts/packets.py ./scripts/
 RUN mkdir /results && chown 65532:65532 /results

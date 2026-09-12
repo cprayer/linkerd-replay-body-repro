@@ -20,8 +20,8 @@ The [Go client](fixture/client.go) sends the request once; the [Go server](fixtu
 The client sends `ping` and prints its actual response through Linkerd:
 
 ```text
-ECHO refused-before-000 SENT "ping" (4 bytes) RECEIVED "pingping" (8 bytes) HTTP 200
-ECHO refused-after-000 SENT "ping" (4 bytes) RECEIVED "ping" (4 bytes) HTTP 200
+ECHO failfast-before-000 SENT "ping" (4 bytes) RECEIVED "pingping" (8 bytes) HTTP 200
+ECHO failfast-after-000 SENT "ping" (4 bytes) RECEIVED "ping" (4 bytes) HTTP 200
 ```
 
 Each `ECHO` line includes the request ID and HTTP status. One HTTP 200 echo per scenario is shown
@@ -31,9 +31,10 @@ the sent/received strings with direct links to those logs.
 The log ends with one row per run: **before duplicates → after duplicates → PASS/FAIL**. PASS means the original bug was reproduced and the fix passed all checks.
 
 Checks cover REFUSED_STREAM, FailFast, consumed-body 503, early 503, and a healthy backend.
-The REFUSED_STREAM case sends HEADERS, waits 500 ms, then sends `ping`.
-The **FailFast case has no client delay** (`-delay-ms 0`): the client sends `ping` immediately,
-and the proxy can retry from an empty backend to the echo server.
+The **FailFast case uses the simple HTTP/2 app without a client delay**: the client sends `ping`,
+and the proxy can retry from an empty backend to the echo server. The healthy control uses the same app.
+The frame-controlled [REFUSED_STREAM experiment](fixture/frames/README.md) sends HEADERS,
+waits 500 ms, then sends `ping`; its original controls and JSON logs remain available.
 The echo table in `report.md` shows both cases and their client delays. INCONCLUSIVE results get up to two extra attempts; FAIL is never retried.
 
 Repeat the same run:

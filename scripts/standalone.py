@@ -2,9 +2,11 @@
 """Run the HTTP/2 reproduction using local processes inside the image."""
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import datetime
 import json
 from pathlib import Path
+import re
 import signal
 import socket
 import subprocess
@@ -13,7 +15,7 @@ import time
 import urllib.request
 import uuid
 
-from reproduce import CASES, PAYLOAD, VARIANTS, Run, require, verify_case, write_json
+from reproduce import CASES, PAYLOAD, VARIANTS, Run, metric, require, verify_case, write_json
 from run import Batch, positive, nonnegative
 from packets import analyze, capture
 
@@ -50,10 +52,33 @@ class LocalRun:
         self.out = artifacts / ident
         self.out.mkdir(parents=True)
         self.codes = {}
+        self.echo_codes = {}
         self.results = []
         self.report = {"run": ident, "status": "RUNNING", "mode": "standalone",
                        "upstreamRevision": "e5de317dfe0feb8f6ff06f07c4e8ec9f61ab7a8f",
                        "payload": PAYLOAD, "cases": self.results}
+
+    def echo_clients(self, label, addr, count):
+        commands = [["echo-h2", "-mode", "client", "-addr", addr, "-id", label + "-%03d" % index]
+                    for index in range(count)]
+        with (self.out / "commands.jsonl").open("a") as log:
+            for command in commands:
+                log.write(json.dumps({"argv": command, "log": label + ".log"}) + "\n")
+
+        def invoke(command):
+            try:
+                return subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                      text=True, timeout=30)
+            except subprocess.TimeoutExpired as error:
+                partial = error.stdout or b""
+                return subprocess.CompletedProcess(command, 124, partial.decode(errors="replace") + "\nClient timed out\n")
+
+        with ThreadPoolExecutor(max_workers=count) as pool:
+            results = list(pool.map(invoke, commands))
+        self.echo_codes[label] = {command[-1]: result.returncode for command, result in zip(commands, results)}
+        output = "".join(result.stdout for result in results)
+        (self.out / (label + ".log")).write_text(output)
+        return subprocess.CompletedProcess(commands, int(any(result.returncode for result in results)), output)
 
     def scenario(self, case, count, delay, variant):
         label = case + "-" + variant
@@ -64,6 +89,8 @@ class LocalRun:
                                     "early503": "http503"}.get(case, "none")]
         if case == "consumed503":
             server_args.append("-consume-first")
+        if case in ("healthy", "failfast"):
+            server_args = ["echo-h2", "-mode", "server", "-addr", "127.0.0.1:" + str(backend)]
         ready = self.out / (label + "-listeners.json")
         processes = []
         with (self.out / (server_name + "-server.log")).open("a") as server_log, \
@@ -80,13 +107,14 @@ class LocalRun:
                 listeners = json.loads(ready.read_text())
                 listeners["backend"] = "127.0.0.1:" + str(backend)
                 write_json(ready, listeners)
-                client = ["audit-h2", "-mode", "client", "-addr", listeners["outbound"],
-                          "-authority", label + ":8080", "-id", label, "-payload", PAYLOAD,
-                          "-delay-ms", str(delay), "-concurrency", str(count)]
-                if case == "failfast":
-                    client.append("-warmup=false")
                 print("Running " + label, flush=True)
-                result = self.command(client, label + ".log", check=False, timeout=60)
+                if case in ("healthy", "failfast"):
+                    result = self.echo_clients(label, listeners["outbound"], count)
+                else:
+                    client = ["audit-h2", "-mode", "client", "-addr", listeners["outbound"],
+                              "-authority", label + ":8080", "-id", label, "-payload", PAYLOAD,
+                              "-delay-ms", str(delay), "-concurrency", str(count)]
+                    result = self.command(client, label + ".log", check=False, timeout=60)
                 self.codes[label] = result.returncode
                 for line in result.stdout.splitlines():
                     if line.startswith("ECHO " + label + "-000 "):
@@ -119,7 +147,10 @@ class LocalRun:
                            "packetReport": case + "-" + variant + "-packets.md"}
                     self.results.append(row)
                     try:
-                        verify_case(self, row)
+                        if case in ("healthy", "failfast"):
+                            verify_echo_case(self, row)
+                        else:
+                            verify_case(self, row)
                         packet_duplicates = analyze(self.out / (case + "-" + variant + ".pcap"), listeners, count)
                         row["packetDuplicateRequests"] = packet_duplicates
                         require(packet_duplicates == row["duplicateRequests"],
@@ -163,6 +194,45 @@ class LocalRun:
             self.report["clientExitCodes"] = self.codes
             write_json(self.out / "summary.json", self.report)
         return code
+
+
+def verify_echo_case(run, row):
+    case, variant, count = row["scenario"], row["variant"], row["requests"]
+    label = case + "-" + variant
+    responses = re.findall(r'^ECHO (\S+) SENT "ping" \(4 bytes\) RECEIVED "(ping|pingping)" \((4|8) bytes\) HTTP 200$',
+                           (run.out / (label + ".log")).read_text(), re.MULTILINE)
+    expected_ids = {label + "-%03d" % index for index in range(count)}
+    require(len(responses) == count and {r[0] for r in responses} == expected_ids,
+            label + ": missing, repeated, or unexpected client responses")
+    server = re.findall(r'^SERVER (\S+) RECEIVED "(ping|pingping)" \((4|8) bytes\)$',
+                        (run.out / ("healthy-" + variant + "-server.log")).read_text(), re.MULTILINE)
+    server = [r for r in server if r[0].startswith(label + "-")]
+    require(sorted(server) == sorted(responses), label + ": server body disagrees with client response")
+    duplicates = [ident for ident, body, _ in responses if body == PAYLOAD * 2]
+    for ident, body, size in responses:
+        require(int(size) == len(body) and run.echo_codes[label][ident] == int(body != PAYLOAD),
+                label + ": byte count or client exit code disagrees with echo")
+    require(run.codes[label] == int(bool(duplicates)), label + ": unexpected client exit code")
+    metrics = run.out / ("client-" + variant + ".prom")
+    retries = metric(metrics, "outbound_http_route_retry_requests_total", label)
+    successes = metric(metrics, "outbound_http_route_retry_successes_total", label)
+    require(retries == successes, label + ": proxy retry failed")
+    row.update(payloadMatches=count - len(duplicates), duplicateRequests=len(duplicates), duplicateIds=duplicates,
+               responseStatuses={"200": count}, proxyRetriedRequests=retries, proxyRetrySuccesses=successes,
+               clientExitCodes=run.echo_codes[label])
+    if case == "failfast":
+        failures = len(re.findall(r"retryable=true error=.*failfast-" + variant + r"-empty.*service in fail-fast",
+                                 (run.out / ("client-" + variant + "-proxy.log")).read_text()))
+        row["failFastRetryLogs"] = failures
+        require(0 <= retries <= count and failures == retries, label + ": FailFast logs disagree with retries")
+        if variant == "before":
+            require(len(duplicates) == retries, label + ": FailFast retries did not duplicate exactly once")
+        example = next(r for r in responses if r[0] == label + "-000")
+        row["echo"] = {"sent": PAYLOAD, "received": example[1], "id": example[0], "log": label + ".log", "delayMs": 0}
+    else:
+        require(retries == 0, label + ": healthy backend unexpectedly retried")
+    if variant == "after" or case == "healthy":
+        require(not duplicates, label + ": body was duplicated")
 
 
 class LocalBatch(Batch):

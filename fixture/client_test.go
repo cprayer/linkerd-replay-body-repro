@@ -1,62 +1,45 @@
 package main
 
 import (
-	"fmt"
-	"net"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
-	"time"
 
 	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 )
 
-func TestClientSendsOneBodyAndChecksEcho(t *testing.T) {
-	for _, delay := range []int{0, 5} {
-		t.Run(fmt.Sprintf("delay-%d", delay), func(t *testing.T) {
-			client, server := net.Pipe()
-			defer client.Close()
+func TestClientChecksActualHTTP2Echo(t *testing.T) {
+	for _, response := range []string{"ping", "pingping", "wrong"} {
+		t.Run(response, func(t *testing.T) {
+			var calls atomic.Int64
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				if r.ProtoMajor != 2 || r.ContentLength != -1 {
+					t.Errorf("expected streaming HTTP/2 request: %s, length %d", r.Proto, r.ContentLength)
+				}
+				if response == "ping" {
+					echo(w, r)
+					return
+				}
+				body, err := io.ReadAll(r.Body)
+				if err != nil || string(body) != "ping" {
+					t.Errorf("unexpected request: %q, %v", body, err)
+				}
+				w.Header().Set("x-audit-id", r.Header.Get("x-audit-id"))
+				io.WriteString(w, response)
+			})
+			server := httptest.NewServer(h2c.NewHandler(handler, &http2.Server{}))
 			defer server.Close()
-			client.SetDeadline(time.Now().Add(2 * time.Second))
-			server.SetDeadline(time.Now().Add(2 * time.Second))
-			done := make(chan error, 1)
-			go func() {
-				done <- func() error {
-					w := newWire(server)
-					frame, err := w.readFrame()
-					if err != nil {
-						return err
-					}
-					headers, ok := frame.(*http2.MetaHeadersFrame)
-					if !ok || headers.StreamEnded() {
-						return fmt.Errorf("expected request headers: %v", frame)
-					}
-					frame, err = w.readFrame()
-					if err != nil {
-						return err
-					}
-					data, ok := frame.(*http2.DataFrame)
-					if !ok || !data.StreamEnded() || data.StreamID != headers.StreamID || string(data.Data()) != "ping" {
-						return fmt.Errorf("expected one complete ping body: %v", frame)
-					}
-					if err := echo(w, data.StreamID, &request{id: "example", attempt: 1, data: data.Data()}); err != nil {
-						return err
-					}
-					for i := 0; i < 2; i++ {
-						frame, err = w.readFrame()
-						if err != nil {
-							return err
-						}
-						if _, ok := frame.(*http2.WindowUpdateFrame); !ok {
-							return fmt.Errorf("unexpected extra request frame: %v", frame)
-						}
-					}
-					return nil
-				}()
-			}()
-			if err := exchange(newWire(client), 1, options{id: "example", payload: "ping", delay: delay}, false); err != nil {
-				t.Fatal(err)
+			err := client(strings.TrimPrefix(server.URL, "http://"), "example")
+			if (err == nil) != (response == "ping") {
+				t.Fatalf("response %q: unexpected result %v", response, err)
 			}
-			if err := <-done; err != nil {
-				t.Fatal(err)
+			if calls.Load() != 1 {
+				t.Fatalf("expected one request, got %d", calls.Load())
 			}
 		})
 	}

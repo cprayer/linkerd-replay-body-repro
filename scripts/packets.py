@@ -64,7 +64,7 @@ def requests_from_pdml(path, outbound, backend):
             key = (tcp, stream)
             headers = {field(header, "http2.header.name"): field(header, "http2.header.value")
                        for header in frame.findall('.//field[@name="http2.header"]')}
-            if sending and headers.get(":path") == "/audit.Service/Call":
+            if sending and headers.get(":path") in ("/", "/audit.Service/Call"):
                 if not headers.get("x-audit-id") or key in streams:
                     raise ValueError("Missing audit ID or repeated request headers in packet " + number)
                 streams[key] = {"id": headers["x-audit-id"], "leg": "input" if port == outbound else "output",
