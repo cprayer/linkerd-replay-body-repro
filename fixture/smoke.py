@@ -56,10 +56,14 @@ def main():
                 if expected_exit == 0:
                     successes = [e for e in observed if e['event'] == 'client_success']
                     assert len(successes) == 1 and successes[0]['bytes'] == 11 and successes[0]['attempt'] == attempt
+                    responses = [e for e in observed if e['event'] == 'client_response']
+                    assert len(responses) == 1 and responses[0]['body'] == 'hello world'
+                    assert 'SENT "hello world" (11 bytes) RECEIVED "hello world" (11 bytes)' in result.stdout
                 else:
                     errors = [e['error'] for e in observed if e['event'] == 'client_failure']
                     expected = {'refused': 'RST_STREAM(REFUSED_STREAM)', 'http503': 'status=503', 'grpc14': 'grpc-status=14'}[failure]
                     assert len(errors) == 1 and expected in errors[0], errors
+                    assert not any(line.startswith('ECHO ') for line in result.stdout.splitlines())
                 summary.append({'case': case, 'invocation': attempt, 'exit': result.returncode})
             server_log = run(['docker', 'logs', name], check=True).stdout
             (args.output / (case + '-server.log')).write_text(server_log)

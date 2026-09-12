@@ -2,13 +2,43 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import Mock, patch
 import xml.etree.ElementTree as ET
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from packets import compare, requests_from_pdml
+from packets import analyze, capture, compare, requests_from_pdml
 
 
 class PacketTest(unittest.TestCase):
+    def test_capture_checks_loss_without_writing_diagnostic_files(self):
+        for output, fails in (("0 packets dropped by kernel\n", False),
+                              ("2 packets dropped by kernel\n", True), ("missing statistics\n", True)):
+            with self.subTest(output=output), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "capture.pcap"
+                path.write_bytes(bytes(24))
+                process = Mock(returncode=0)
+                process.poll.return_value = None
+                process.communicate.return_value = (output, None)
+                with patch("packets.subprocess.Popen", return_value=process):
+                    if fails:
+                        with self.assertRaisesRegex(RuntimeError, "Packet capture loss"):
+                            with capture(path):
+                                pass
+                    else:
+                        with capture(path):
+                            pass
+                process.send_signal.assert_called_once()
+                self.assertEqual(list(Path(directory).iterdir()), [path])
+
+    def test_tshark_failure_keeps_error_in_exception(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "capture.pcap"
+            result = Mock(returncode=1, stderr="invalid capture")
+            with patch("packets.subprocess.run", return_value=result):
+                with self.assertRaisesRegex(RuntimeError, "TShark failed: invalid capture"):
+                    analyze(path, {"outbound": "127.0.0.1:4140", "backend": "127.0.0.1:8080"}, 1)
+            self.assertFalse(list(Path(directory).glob("*.log")))
+
     def test_multiplexed_data_reassembly_and_retries(self):
         document = ET.Element("pdml")
 

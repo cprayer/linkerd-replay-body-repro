@@ -20,9 +20,9 @@ The image is `linkerd-replay-fixture:local` (override with `FIXTURE_IMAGE`). It 
 # Control: -delay-ms 0. Concurrency: -concurrency 20 -warmup=false.
 ```
 
-The client **never retries**. It validates the echoed audit ID, byte count, payload, and SHA256. The default warmup uses a separate bodyless stream (`/audit/warmup`, HTTP 204) and does not increment attempt counters. Concurrent clients use separate connections and unique suffixed IDs. Payloads are limited to 16,384 bytes; the socket deadline is 15 seconds.
+The client **never retries**. It checks that the raw response body equals the sent bytes and that the `x-audit-id` response header matches. Each `ECHO` line shows the actual sent and received strings. The default warmup uses a separate bodyless stream (`/audit/warmup`, HTTP 204) and does not increment attempt counters. Concurrent clients use separate connections and unique suffixed IDs. Payloads are limited to 16,384 bytes; the socket deadline is 15 seconds.
 
-Server failures are `RST_STREAM(REFUSED_STREAM)`, HTTP 503 with END_STREAM, or HTTP 200 with trailers-only `grpc-status: 14`. Success echoes raw bytes in a JSON response. `-grpc` sets request headers to exercise gRPC status-based policies; this is an HTTP/2 transport fixture, **not a generated gRPC client**. It does not encode Protobuf messages or gRPC DATA envelopes.
+Server failures are `RST_STREAM(REFUSED_STREAM)`, HTTP 503 with END_STREAM, or HTTP 200 with trailers-only `grpc-status: 14`. On success, [echo.go](echo.go) returns the received bytes directly as the HTTP response body. `-grpc` sets request headers to exercise gRPC status-based policies; this is an HTTP/2 transport fixture, **not a generated gRPC client**. It does not encode Protobuf messages or gRPC DATA envelopes.
 
 JSON logs include UTC timestamps, connection/stream IDs, attempt numbers, cumulative DATA bytes, rejection, end-of-stream, resets, and received GOAWAY. The server does not send GOAWAY. Compare `client_headers`, `reject`, `client_data`, and `request_end` to verify actual timing and byte counts. A delay is an experimental control, not proof by itself that the proxy has not read the body.
 

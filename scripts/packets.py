@@ -6,37 +6,37 @@ import re
 import shlex
 import signal
 import subprocess
+import tempfile
 import time
 import xml.etree.ElementTree as ET
 
 
 @contextmanager
 def capture(path):
-    log = path.with_suffix(".capture.log")
-    with log.open("w") as output:
-        process = subprocess.Popen(["tcpdump", "--immediate-mode", "-U", "-B", "65536", "-i", "lo", "-p", "-s", "0",
-                                    "-w", str(path), "tcp"], stdout=output, stderr=subprocess.STDOUT)
+    process = subprocess.Popen(["tcpdump", "--immediate-mode", "-U", "-B", "65536", "-i", "lo", "-p", "-s", "0",
+                                "-w", str(path), "tcp"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               text=True, errors="replace")
+    try:
+        deadline = time.monotonic() + 10
+        while not path.exists() or path.stat().st_size < 24:
+            if process.poll() is not None or time.monotonic() >= deadline:
+                raise RuntimeError("Packet capture did not start")
+            time.sleep(0.05)
+        yield
+    finally:
+        if process.poll() is None:
+            process.send_signal(signal.SIGINT)
         try:
-            deadline = time.monotonic() + 10
-            while not path.exists() or path.stat().st_size < 24:
-                if process.poll() is not None or time.monotonic() >= deadline:
-                    raise RuntimeError("Packet capture did not start; see " + str(log))
-                time.sleep(0.05)
-            yield
-        finally:
-            if process.poll() is None:
-                process.send_signal(signal.SIGINT)
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
-                raise RuntimeError("Packet capture did not stop; see " + str(log))
+            output, _ = process.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            output, _ = process.communicate()
+            raise RuntimeError("Packet capture did not stop: " + output.strip())
         if process.returncode:
-            raise RuntimeError("Packet capture failed; see " + str(log))
-    dropped = re.search(r"(\d+) packets dropped by kernel", log.read_text())
-    if not dropped or int(dropped[1]):
-        raise RuntimeError("Packet capture loss is nonzero or unknown; see " + str(log))
+            raise RuntimeError("Packet capture failed: " + output.strip())
+        dropped = re.search(r"(\d+) packets dropped by kernel", output)
+        if not dropped or int(dropped[1]):
+            raise RuntimeError("Packet capture loss is nonzero or unknown: " + output.strip())
 
 
 def field(node, name, attribute="show"):
@@ -141,20 +141,21 @@ def analyze(path, listeners, count):
                "-d", "tcp.port==" + backend + ",http2", "-o", "tcp.desegment_tcp_streams:TRUE",
                "-Y",
                "http2 && (tcp.port == " + outbound + " || tcp.port == " + backend + ")"]
-    with path.with_suffix(".tshark.log").open("w") as errors:
-        for suffix, options in ((".http2.txt", ["-V", "-x"]), (".pdml", ["-T", "pdml"])):
-            with path.with_suffix(suffix).open("w") as output:
-                subprocess.run(command + options, cwd=path.parent, stdout=output, stderr=errors,
-                               check=True, timeout=60)
-    streams = requests_from_pdml(path.with_suffix(".pdml"), outbound, backend)
+    with path.with_suffix(".http2.txt").open("w") as decoded, tempfile.TemporaryFile(mode="w+") as pdml:
+        for output, options in ((decoded, ["-V", "-x"]), (pdml, ["-T", "pdml"])):
+            result = subprocess.run(command + options, cwd=path.parent, stdout=output, stderr=subprocess.PIPE,
+                                    text=True, errors="replace", timeout=60)
+            if result.returncode:
+                raise RuntimeError("TShark failed: " + result.stderr.strip())
+        pdml.seek(0)
+        streams = requests_from_pdml(pdml, outbound, backend)
     duplicates = compare(streams, count)
     report = path.with_name(path.stem + "-packets.md")
     lines = ["# " + path.stem + " — packet evidence", "",
              "%d/%d requests have duplicated DATA at proxy output." % (duplicates, count), "",
              "Derived from captured HTTP/2 headers and DATA, without reading fixture logs. "
              "Retries are separate output streams; their body lengths are never added together.", "",
-             "[PCAP](%s) · [TShark decode](%s) · [Capture statistics](%s)" % (
-                 path.name, path.with_suffix(".http2.txt").name, path.with_suffix(".capture.log").name), "",
+             "[PCAP](%s) · [TShark decode](%s)" % (path.name, path.with_suffix(".http2.txt").name), "",
              "Client → proxy: TCP destination port **%s**. Proxy → backend: TCP destination port **%s**." % (outbound, backend), "",
              "| Request ID | Leg | TCP stream | HTTP/2 stream | Header packet | DATA packets | Bytes | Response | Comparison |",
              "|---|---|---|---|---|---|---|---|---|"]

@@ -16,6 +16,18 @@ The image contains prebuilt before/after proxies and an HTTP/2 fixture using ups
 
 ## Results
 
+The [Go echo application](fixture/echo.go) returns the received body unchanged.
+The client sends `ping` and prints its actual response through Linkerd:
+
+```text
+ECHO refused-before-000 SENT "ping" (4 bytes) RECEIVED "pingping" (8 bytes) HTTP 200
+ECHO refused-after-000 SENT "ping" (4 bytes) RECEIVED "ping" (4 bytes) HTTP 200
+```
+
+Each `ECHO` line includes the request ID and HTTP status. One HTTP 200 echo per scenario is shown
+in the Docker console; the raw client logs contain every request. `report.md` also shows
+the sent/received strings with direct links to those logs.
+
 The log ends with one row per run: **before duplicates → after duplicates → PASS/FAIL**. PASS means the original bug was reproduced and the fix passed all checks.
 
 Checks cover REFUSED_STREAM, FailFast, consumed-body 503, early 503, and a healthy backend. INCONCLUSIVE results get up to two extra attempts; FAIL is never retried.
@@ -43,6 +55,8 @@ Each scenario saves a `.pcap` captured by `tcpdump` and an `.http2.txt` decoded 
 The comparison reads captured HTTP/2 headers and DATA, independently of fixture JSON logs.
 Open the PCAP in Wireshark or use the exact TShark command and filters included in the comparison report.
 Capture errors, reported packet drops, incomplete evidence, or disagreement with fixture counts fail the run.
+Only failed batches create `errors.log`, combining console, fixture, and proxy logs with failure details.
+Capture statistics, TShark diagnostic logs, `.stderr` files, and intermediate PDML files are not saved separately.
 
 Capture is enabled by default in the standalone Docker image and uses its isolated loopback interface.
 The image grants only `tcpdump` the `NET_RAW` file capability; the runner stays non-root.

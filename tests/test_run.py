@@ -53,10 +53,15 @@ print("fixture stderr attempt", index + 1, file=sys.stderr)
 if not os.environ.get("TEST_NO_SUMMARY"):
     out = args.artifacts / "fixture-run"
     out.mkdir(parents=True)
+    (out / "server.log").write_text("server diagnostic")
+    for variant in ("before", "after"):
+        (out / ("refused-" + variant + ".log")).write_text("actual echo response")
     status = os.environ.get("TEST_SUMMARY_STATUS") or {0: "PASS", 1: "FAIL", 2: "INCONCLUSIVE"}.get(code, "FAIL")
     (out / "summary.json").write_text(json.dumps({"status": status, "cases": [
         {"scenario": scenario, "variant": variant, "status": status,
-         "duplicateRequests": (10 if scenario == "refused" else 2 if scenario == "failfast" else 0) if variant == "before" else 0}
+         "duplicateRequests": (10 if scenario == "refused" else 2 if scenario == "failfast" else 0) if variant == "before" else 0,
+         **({"echo": {"sent": "ping", "received": os.environ.get("TEST_ECHO", "pingping") if variant == "before" else "ping",
+                      "id": "refused-" + variant + "-000", "log": "refused-" + variant + ".log"}} if scenario == "refused" else {})}
         for variant in ("before", "after")
         for scenario in ("refused", "consumed503", "early503", "healthy", "failfast")]}))
 sys.exit(code)
@@ -91,6 +96,7 @@ sys.exit(code)
         self.assertIn("# PASS — 3/3 runs passed", report_md)
         self.assertIn("| 3 | 12 | 0 | PASS |", result.stdout)
         self.assertNotIn("fixture stdout", result.stdout)
+        self.assertFalse((self.out / "errors.log").exists())
 
     def test_inconclusive_retry_preserves_original_result(self):
         result, report = self.run_batch([2, 0])
@@ -98,17 +104,32 @@ sys.exit(code)
         self.assertEqual([a["status"] for a in report["runs"][0]["attempts"]], ["INCONCLUSIVE", "PASS"])
         self.assertEqual(report["attemptCounts"], {"INCONCLUSIVE": 1, "PASS": 1})
 
+    def test_report_displays_observed_echo_and_links_raw_response(self):
+        result, report = self.run_batch([0], TEST_ECHO="unexpected response")
+        self.assertEqual(result.returncode, 0)
+        echo = report["runs"][0]["attempts"][0]["echo"]["before"]
+        self.assertEqual(echo["received"], "unexpected response")
+        self.assertTrue((self.out / echo["log"]).is_file())
+        self.assertIn('["unexpected response"](' + echo["log"] + ')', (self.out / "report.md").read_text())
+
     def test_exhausted_retries_exit_two(self):
         result, report = self.run_batch([2, 2, 2])
         self.assertEqual(result.returncode, 2)
         self.assertEqual(report["status"], "INCONCLUSIVE")
         self.assertEqual(len(report["runs"][0]["attempts"]), 3)
+        self.assertFalse((self.out / "errors.log").exists())
 
     def test_failure_is_not_retried_or_hidden_by_later_pass(self):
         result, report = self.run_batch([1, 0], "--runs", "2")
         self.assertEqual(result.returncode, 1)
         self.assertEqual([row["status"] for row in report["runs"]], ["FAIL", "PASS"])
         self.assertEqual([len(row["attempts"]) for row in report["runs"]], [1, 1])
+        errors = list(self.out.rglob("errors.log"))
+        self.assertEqual(errors, [self.out / "errors.log"])
+        self.assertIn("fixture stdout attempt 1", errors[0].read_text())
+        self.assertIn("fixture stderr attempt 1", errors[0].read_text())
+        self.assertIn("server diagnostic", errors[0].read_text())
+        self.assertIn("[Error details](errors.log)", (self.out / "report.md").read_text())
 
     def test_failure_takes_priority_over_inconclusive(self):
         result, report = self.run_batch([2, 1], "--runs", "2", "--retries", "0")
@@ -129,11 +150,13 @@ sys.exit(code)
         self.assertEqual(report["runs"], [])
         self.assertIn("Command exited 7", report["error"])
         self.assertEqual(self.trace.read_text().splitlines(), ["scripts/build-proxies.sh"])
+        self.assertIn("Command exited 7", (self.out / "errors.log").read_text())
 
     def test_missing_summary_does_not_pass(self):
         result, report = self.run_batch([0], TEST_NO_SUMMARY="1")
         self.assertEqual(result.returncode, 1)
         self.assertIn("Expected one", report["runs"][0]["attempts"][0]["error"])
+        self.assertIn("Expected one", (self.out / "errors.log").read_text())
 
     def test_inconsistent_summary_does_not_pass(self):
         result, report = self.run_batch([0], TEST_SUMMARY_STATUS="FAIL")

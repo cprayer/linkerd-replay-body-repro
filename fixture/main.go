@@ -231,11 +231,7 @@ func serverConn(c net.Conn, conn uint64, a *attempts, o options) {
 		if r.attempt == 1 && o.failure != "none" {
 			return fail(stream, r)
 		}
-		payload, _ := json.Marshal(map[string]any{"id": r.id, "attempt": r.attempt, "bytes": len(r.data), "payload": string(r.data), "sha256": digest(r.data)})
-		if err := w.headers(stream, []hpack.HeaderField{{Name: ":status", Value: "200"}, {Name: "content-type", Value: "application/json"}, {Name: "content-length", Value: strconv.Itoa(len(payload))}}, false); err != nil {
-			return err
-		}
-		if err := w.data(stream, payload, true); err != nil {
+		if err := echo(w, stream, r); err != nil {
 			return err
 		}
 		event("success", fields(stream, r))
@@ -407,6 +403,7 @@ func exchange(w *wire, stream uint32, o options, warmup bool) error {
 	}
 	var body []byte
 	status, grpcStatus := "", ""
+	responseID, attempt := "", 0
 	for {
 		frame, err := w.f.ReadFrame()
 		if err != nil {
@@ -440,6 +437,15 @@ func exchange(w *wire, stream uint32, o options, warmup bool) error {
 				if h.Name == "grpc-status" {
 					grpcStatus = h.Value
 				}
+				if h.Name == "x-audit-id" {
+					responseID = h.Value
+				}
+				if h.Name == "x-audit-attempt" {
+					attempt, err = strconv.Atoi(h.Value)
+					if err != nil {
+						return err
+					}
+				}
 			}
 			ended = f.StreamEnded()
 			event("client_response_headers", map[string]any{"id": o.id, "stream": stream, "status": status, "grpc_status": grpcStatus, "end_stream": ended})
@@ -471,24 +477,18 @@ func exchange(w *wire, stream uint32, o options, warmup bool) error {
 			event("client_warmup_done", map[string]any{"id": o.id, "stream": stream})
 			return nil
 		}
-		event("client_response", map[string]any{"id": o.id, "status": status, "grpc_status": grpcStatus, "body": string(body)})
+		event("client_response", map[string]any{"id": o.id, "status": status, "grpc_status": grpcStatus,
+			"response_id": responseID, "attempt": attempt, "body": string(body), "bytes": len(body), "sha256": digest(body)})
 		if status != "200" || (grpcStatus != "" && grpcStatus != "0") {
 			return fmt.Errorf("status=%s grpc-status=%s", status, grpcStatus)
 		}
-		var received struct {
-			ID      string `json:"id"`
-			Attempt int    `json:"attempt"`
-			Bytes   int    `json:"bytes"`
-			Payload string `json:"payload"`
-			SHA256  string `json:"sha256"`
-		}
-		if err = json.Unmarshal(body, &received); err != nil {
-			return err
-		}
-		if received.ID != o.id || received.Bytes != len(o.payload) || received.Payload != o.payload || received.SHA256 != digest([]byte(o.payload)) {
+		output.Lock()
+		fmt.Printf("ECHO %s SENT %q (%d bytes) RECEIVED %q (%d bytes) HTTP %s\n", o.id, o.payload, len(o.payload), body, len(body), status)
+		output.Unlock()
+		if responseID != o.id || !bytes.Equal(body, []byte(o.payload)) {
 			return fmt.Errorf("payload mismatch: %s", body)
 		}
-		event("client_success", map[string]any{"id": o.id, "attempt": received.Attempt, "bytes": received.Bytes, "sha256": received.SHA256})
+		event("client_success", map[string]any{"id": o.id, "attempt": attempt, "bytes": len(body), "sha256": digest(body)})
 		return nil
 	}
 }

@@ -59,9 +59,22 @@ class Batch:
     def write_report(self):
         passed = sum(row["status"] == "PASS" for row in self.report["runs"])
         lines = ["# %s — %d/%d runs passed" % (self.report["status"], passed, self.args.runs), "",
-                 "PASS = bug reproduced before the fix, all checks passed after the fix.", "",
-                 "| Run | Before: duplicated requests | After: duplicated requests | Result | Logs |",
-                 "|---|---|---|---|---|"]
+                 "PASS = bug reproduced before the fix, all checks passed after the fix.", ""]
+        echoes = [row for row in self.report["runs"] if row["attempts"] and row["attempts"][-1].get("echo")]
+        if echoes:
+            lines.extend(["The Go application echoes request bytes unchanged. "
+                          "Received is the client's actual HTTP response body through Linkerd (REFUSED_STREAM example).", "",
+                          "| Run | Sent | Received before | Received after |",
+                          "|---|---|---|---|"])
+            for row in echoes:
+                echo = row["attempts"][-1]["echo"]
+                received = ["[%s](%s)" % (json.dumps(echo[v]["received"]), echo[v]["log"]) if v in echo else "?"
+                            for v in ("before", "after")]
+                lines.append("| %d | `%s` | %s | %s |" % (
+                    row["run"], next(iter(echo.values()))["sent"], *received))
+            lines.append("")
+        lines.extend(["| Run | Before: duplicated requests | After: duplicated requests | Result | Logs |",
+                      "|---|---|---|---|---|"])
         extra_attempts = 0
         for row in self.report["runs"]:
             duplicates = {"before": "?", "after": "?"}
@@ -79,6 +92,8 @@ class Batch:
             lines.extend(["", "Error: " + self.report["error"]])
         lines.extend(["", "Counts cover all scenarios in the final attempt. '?' means data is incomplete.", "",
                       "[Full log](runner.log) · [Raw results](summary.json)"])
+        if self.report["status"] == "FAIL":
+            lines.extend(["", "[Error details](errors.log)"])
         packets = ["[Run %d](%s)" % (row["run"], row["attempts"][-1]["packetReport"])
                    for row in self.report["runs"] if row["attempts"] and row["attempts"][-1].get("packetReport")]
         if packets:
@@ -105,6 +120,8 @@ class Batch:
                     log.flush()
                     combined.write(line)
                     combined.flush()
+                    if line.startswith("ECHO "):
+                        print(line, end="", flush=True)
                 code = process.wait()
             except BaseException:
                 if process.poll() is None:
@@ -187,10 +204,15 @@ class Batch:
                     if code not in STATUSES or summary["status"] != STATUSES[code]:
                         raise ValueError("Summary status disagrees with exit code")
                     result["duplicates"] = {}
+                    result["echo"] = {}
                     for variant in ("before", "after"):
                         cases = [case for case in summary.get("cases", []) if case["variant"] == variant]
                         if len(cases) == 5 and all("duplicateRequests" in case for case in cases):
                             result["duplicates"][variant] = sum(case["duplicateRequests"] for case in cases)
+                        for case in cases:
+                            if case.get("echo"):
+                                result["echo"][variant] = dict(case["echo"], log=str(
+                                    (summaries[0].parent / case["echo"]["log"]).relative_to(self.out)))
                 except (ValueError, KeyError, OSError, TypeError) as error:
                     result.update(status="FAIL", error=str(error))
                 row["attempts"].append(result)
@@ -217,6 +239,13 @@ class Batch:
             self.emit("FAIL: " + self.report["error"])
         finally:
             self.report["status"] = STATUSES[code]
+            if code == 1:
+                logs = sorted(self.out.rglob("*.log"))
+                with (self.out / "errors.log").open("w") as errors:
+                    for log in logs:
+                        errors.write("\n--- " + str(log.relative_to(self.out)) + " ---\n")
+                        errors.write(log.read_text(errors="replace") + "\n")
+                    errors.write(json.dumps(self.report, indent=2) + "\n")
             self.save()
         self.emit("\n" + (self.out / "report.md").read_text())
         self.emit("Report: " + str(self.out / "report.md"))

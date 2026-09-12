@@ -1,6 +1,9 @@
+from contextlib import redirect_stderr
+import io
 import json
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -43,7 +46,7 @@ class LocalRunTest(unittest.TestCase):
         self.server.terminate.assert_called_once()
 
     def test_missing_metrics_fails_and_cleans_up(self):
-        self.repro.command = Mock(return_value=Mock(returncode=0))
+        self.repro.command = Mock(return_value=Mock(returncode=0, stdout=""))
         with patch("standalone.subprocess.Popen", side_effect=[self.server, self.proxy]), \
                 patch("standalone.wait_until"), patch("standalone.free_port", return_value=8080), \
                 patch("standalone.urllib.request.urlopen", side_effect=OSError("metrics unavailable")):
@@ -58,6 +61,26 @@ class LocalRunTest(unittest.TestCase):
         summary = json.loads((self.repro.out / "summary.json").read_text())
         self.assertEqual(summary["status"], "FAIL")
         self.assertEqual(summary["error"], "proxy failed to start")
+
+    def test_command_sends_stderr_to_console_without_changing_stdout(self):
+        console = io.StringIO()
+        with redirect_stderr(console):
+            result = self.repro.command([sys.executable, "-c",
+                                         'import sys; print("{}"); print("diagnostic", file=sys.stderr)'], "output.json")
+        self.assertEqual(json.loads(result.stdout), {})
+        self.assertEqual(json.loads((self.repro.out / "output.json").read_text()), {})
+        self.assertIn("diagnostic", console.getvalue())
+        self.assertFalse(list(self.repro.out.glob("*.stderr")))
+
+    def test_command_timeout_keeps_partial_output_and_console_error(self):
+        console = io.StringIO()
+        error = subprocess.TimeoutExpired(["client"], 1, output=b"partial output", stderr=b"timeout diagnostic")
+        with redirect_stderr(console), patch("reproduce.subprocess.run", side_effect=error):
+            with self.assertRaisesRegex(RuntimeError, "Command timed out"):
+                self.repro.command(["client"], "timeout.log", timeout=1)
+        self.assertEqual((self.repro.out / "timeout.log").read_text(), "partial output")
+        self.assertIn("timeout diagnostic", console.getvalue())
+        self.assertFalse(list(self.repro.out.glob("*.stderr")))
 
     def test_packet_analysis_failure_preserves_fixture_counts(self):
         self.repro.scenario = Mock(return_value={"outbound": "127.0.0.1:4140", "backend": "127.0.0.1:8080"})

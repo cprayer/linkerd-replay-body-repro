@@ -86,7 +86,11 @@ class LocalRun:
                 if case == "failfast":
                     client.append("-warmup=false")
                 print("Running " + label, flush=True)
-                self.codes[label] = self.command(client, label + ".log", check=False, timeout=60).returncode
+                result = self.command(client, label + ".log", check=False, timeout=60)
+                self.codes[label] = result.returncode
+                for line in result.stdout.splitlines():
+                    if line.startswith("ECHO " + label + "-000 "):
+                        print(line, flush=True)
                 with urllib.request.urlopen("http://" + listeners["admin"] + "/metrics", timeout=10) as response:
                     metrics = response.read().decode()
                 (self.out / (label + ".prom")).write_text(metrics)

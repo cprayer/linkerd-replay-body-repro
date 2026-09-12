@@ -9,6 +9,7 @@
 !fixture/go.mod
 !fixture/go.sum
 !fixture/main.go
+!fixture/echo.go
 !scripts/
 !scripts/run.py
 !scripts/reproduce.py

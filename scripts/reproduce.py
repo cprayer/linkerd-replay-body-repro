@@ -17,7 +17,7 @@ import uuid
 
 
 ROOT = Path(__file__).resolve().parent.parent
-PAYLOAD = "audit-request-0123456789"
+PAYLOAD = "ping"
 CASES = [("refused", 10, 500), ("consumed503", 10, 500),
          ("early503", 10, 500), ("healthy", 10, 0), ("failfast", 20, 0)]
 VARIANTS = ("before", "after")
@@ -82,10 +82,12 @@ class Run:
             output = error.stdout or b""
             stderr = error.stderr or b""
             (self.out / log).write_text(output.decode(errors="replace") if isinstance(output, bytes) else output)
-            (self.out / (log + ".stderr")).write_text(stderr.decode(errors="replace") if isinstance(stderr, bytes) else stderr)
+            if stderr:
+                print(stderr.decode(errors="replace") if isinstance(stderr, bytes) else stderr, end="", file=sys.stderr)
             raise RuntimeError("Command timed out; see " + str(self.out / log)) from error
         (self.out / log).write_text(result.stdout)
-        (self.out / (log + ".stderr")).write_text(result.stderr)
+        if result.stderr:
+            print(result.stderr, end="", file=sys.stderr)
         if check:
             require(result.returncode == 0, "Command failed (%d); see %s" % (result.returncode, self.out / log))
         return result
@@ -306,16 +308,15 @@ def verify_case(run, row):
                     not any(event["event"] == "data" for event in related), label + ": early 503 control changed")
             continue
         require(response["status"] == "200", label + ": unexpected response status")
-        body = json.loads(response["body"])
-        payload = body["payload"]
-        require(body["id"] == ident and payload in (PAYLOAD, PAYLOAD * 2) and body["bytes"] == len(payload) and
-                body["sha256"] == hashlib.sha256(payload.encode()).hexdigest(), label + ": unexpected payload/ID/hash")
+        payload = response["body"]
+        require(response["response_id"] == ident and payload in (PAYLOAD, PAYLOAD * 2) and response["bytes"] == len(payload) and
+                response["sha256"] == hashlib.sha256(payload.encode()).hexdigest(), label + ": unexpected payload/ID/hash")
         if payload == PAYLOAD * 2:
             duplicate_ids.append(ident)
         accepted = [event for event in related if event["event"] == "success"]
         expected_attempt = 1 if case in ("healthy", "failfast") else 2
         require(len(accepted) == 1 and accepted[0]["bytes"] == len(payload) and accepted[0]["attempt"] == expected_attempt and
-                body["attempt"] == expected_attempt and len(headers) == expected_attempt, label + ": unexpected server attempts")
+                response["attempt"] == expected_attempt and len(headers) == expected_attempt, label + ": unexpected server attempts")
         data = [event for event in related if event["event"] == "data" and event["attempt"] == expected_attempt]
         require(sum(event["frame_bytes"] for event in data) == len(payload), label + ": server DATA disagrees with response")
         if case == "refused":
@@ -336,6 +337,9 @@ def verify_case(run, row):
     row.update(payloadMatches=summary["succeeded"], duplicateRequests=len(duplicate_ids), duplicateIds=duplicate_ids,
                responseStatuses=dict(collections.Counter(event["status"] for event in responses)),
                clientDataWrites=len(incoming), proxyRetriedRequests=retries, proxyRetrySuccesses=successes)
+    if case == "refused":
+        example = next(response for response in responses if response["id"] == label + "-000")
+        row["echo"] = {"sent": PAYLOAD, "received": example["body"], "id": example["id"], "log": label + ".log"}
     require(retries == successes, label + ": proxy retry failed")
     if case == "failfast":
         failures = len(re.findall(r"retryable=true error=.*failfast-" + variant + r"-empty.*service in fail-fast",
